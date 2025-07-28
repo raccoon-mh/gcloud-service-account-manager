@@ -235,36 +235,71 @@ echo ""
 echo "=== Google Cloud Project Selection ==="
 echo ""
 
-# 프로젝트 목록 가져오기
-projects_list=$(gcloud projects list --format="table(PROJECT_ID,NAME,PROJECT_NUMBER)")
+# 프로젝트 목록 가져오기 (조직 내의 모든 프로젝트 포함)
+echo "Fetching all accessible projects..."
+
+if [[ -n "$selected_organization_id" ]]; then
+    echo "Searching for all projects in organization: $selected_organization_name ($selected_organization_id)"
+    
+    # 먼저 조직 직접 하위의 프로젝트들을 가져오기
+    projects_list=$(gcloud projects list --filter="parent.id=$selected_organization_id" --format="table(PROJECT_ID,NAME,PROJECT_NUMBER)" --sort-by=NAME)
+    
+    # 프로젝트가 없으면 모든 접근 가능한 프로젝트에서 조직에 속한 것들 찾기
+    if [ -z "$projects_list" ] || [[ "$projects_list" == *"Listed 0 items"* ]]; then
+        echo "No projects found with parent filter, trying alternative methods..."
+        projects_list=$(gcloud projects list --format="table(PROJECT_ID,NAME,PROJECT_NUMBER)" --filter="lifecycleState:ACTIVE" --sort-by=NAME)
+    fi
+    
+    # 폴더 내의 프로젝트들도 추가
+    echo "Searching for projects in all folders under organization..."
+    ALL_FOLDERS=$(gcloud resource-manager folders list --organization="$selected_organization_id" --format="value(name)" 2>/dev/null)
+    
+    if [ ! -z "$ALL_FOLDERS" ]; then
+        echo "Found folders in organization:"
+        for folder in $ALL_FOLDERS; do
+            echo "  - Folder: $folder"
+            FOLDER_PROJECTS=$(gcloud projects list --filter="parent.id=$folder" --format="table(PROJECT_ID,NAME,PROJECT_NUMBER)" 2>/dev/null)
+            if [ ! -z "$FOLDER_PROJECTS" ] && [[ "$FOLDER_PROJECTS" != *"Listed 0 items"* ]]; then
+                echo "    Projects in folder:"
+                # 헤더를 제외하고 프로젝트 정보만 추가
+                FOLDER_PROJECTS_DATA=$(echo "$FOLDER_PROJECTS" | tail -n +2)
+                if [[ -n "$FOLDER_PROJECTS_DATA" ]]; then
+                    echo "$FOLDER_PROJECTS_DATA" | while read -r line; do
+                        if [[ -n "$line" ]]; then
+                            echo "      - $line"
+                        fi
+                    done
+                    # projects_list에 폴더 프로젝트들 추가
+                    projects_list="$projects_list"$'\n'"$FOLDER_PROJECTS_DATA"
+                fi
+            fi
+        done
+    fi
+    
+    # 중복 제거 및 정렬 (PROJECT_ID 기준)
+    if [[ -n "$projects_list" ]]; then
+        echo "Removing duplicates and sorting projects..."
+        # PROJECT_ID를 기준으로 중복 제거
+        projects_list=$(echo "$projects_list" | awk '!seen[$1]++' | sort -k2)
+    fi
+else
+    # 조직이 선택되지 않은 경우, 사용자가 직접 접근 가능한 프로젝트만 가져오기
+    projects_list=$(gcloud projects list --format="table(PROJECT_ID,NAME,PROJECT_NUMBER)" --filter="lifecycleState:ACTIVE" --sort-by=NAME)
+fi
 
 # 프로젝트 목록을 배열로 변환
 projects=()
 project_ids=()
 project_numbers=()
-while IFS= read -r line; do
-    # 헤더 라인 건너뛰기
-    if [[ "$line" == "PROJECT_ID"* ]]; then
-        continue
+
+# awk를 사용하여 안정적으로 파싱
+while IFS=$'\t' read -r project_id project_name project_number; do
+    if [[ -n "$project_id" && "$project_id" != "PROJECT_ID" ]]; then
+        projects+=("$project_name")
+        project_ids+=("$project_id")
+        project_numbers+=("$project_number")
     fi
-    
-    # 빈 라인 건너뛰기
-    if [[ -z "$line" ]]; then
-        continue
-    fi
-    
-    # 프로젝트 정보 파싱 (PROJECT_ID NAME PROJECT_NUMBER 형식)
-    if [[ $line =~ ^([^[:space:]]+)[[:space:]]+([^[:space:]]+)[[:space:]]+([0-9]+)$ ]]; then
-        project_id="${BASH_REMATCH[1]}"
-        project_name="${BASH_REMATCH[2]}"
-        project_number="${BASH_REMATCH[3]}"
-        if [[ -n "$project_id" ]]; then
-            projects+=("$project_name")
-            project_ids+=("$project_id")
-            project_numbers+=("$project_number")
-        fi
-    fi
-done <<< "$projects_list"
+done < <(echo "$projects_list" | awk '{print $1 "\t" $2 "\t" $3}')
 
 # 프로젝트가 없으면 안내
 if [ ${#projects[@]} -eq 0 ]; then
