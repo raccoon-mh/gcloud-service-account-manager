@@ -1,0 +1,38 @@
+{
+    "project_roles": [
+        {
+            "role": "roles/viewer",
+            "description": "기본 읽기 권한 (대부분의 viewer 권한 포함)"
+        },
+        {
+            "role": "roles/iam.securityReviewer",
+            "description": "IAM 보안 검토 권한"
+        },
+        {
+            "role": "roles/bigquery.jobUser",
+            "description": "BigQuery 작업 실행 권한"
+        },
+        {
+            "role": "roles/logging.privateLogViewer",
+            "description": "프라이빗 로그 조회 권한"
+        }
+    ],
+    "org_roles": [
+        {
+            "role": "roles/resourcemanager.organizationViewer",
+            "description": "조직 리소스 조회 권한"
+        },
+        {
+            "role": "roles/resourcemanager.projectViewer",
+            "description": "프로젝트 조회 권한"
+        },
+        {
+            "role": "roles/iam.organizationRoleViewer",
+            "description": "조직 IAM 역할 조회 권한"
+        },
+        {
+            "role": "roles/cloudasset.viewer",
+            "description": "Cloud Asset 조회 권한"
+        }
+    ]
+}

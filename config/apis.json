@@ -1,0 +1,19 @@
+{
+    "apis": [
+        "cloudresourcemanager.googleapis.com",
+        "cloudidentity.googleapis.com",
+        "iam.googleapis.com",
+        "logging.googleapis.com",
+        "compute.googleapis.com",
+        "sqladmin.googleapis.com",
+        "bigquery.googleapis.com",
+        "storage.googleapis.com",
+        "pubsub.googleapis.com",
+        "cloudfunctions.googleapis.com",
+        "recommender.googleapis.com",
+        "cloudasset.googleapis.com",
+        "eventarc.googleapis.com",
+        "cloudbilling.googleapis.com",
+        "monitoring.googleapis.com"
+    ]
+}
