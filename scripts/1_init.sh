@@ -7,7 +7,21 @@ echo ""
 current_account=$(gcloud config get-value account 2>/dev/null)
 
 # gcloud auth list 실행하여 계정 목록 가져오기 (웹 콘솔 호환)
-accounts=($(gcloud auth list --format="value(ACCOUNT)"))
+auth_list=$(gcloud auth list --format="value(ACCOUNT)")
+
+# 웹 콘솔과 일반 터미널 모두 지원하는 방식으로 파싱
+accounts=()
+while IFS= read -r line; do
+    # 빈 라인이나 헤더 라인 건너뛰기
+    if [[ -z "$line" ]] || [[ "$line" == "ACTIVE:"* ]] || [[ "$line" == "ACCOUNT:"* ]]; then
+        continue
+    fi
+    
+    # 유효한 이메일 주소인지 확인
+    if [[ "$line" =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+        accounts+=("$line")
+    fi
+done <<< "$auth_list"
 
 # 계정이 없으면 안내
 if [ ${#accounts[@]} -eq 0 ]; then
