@@ -6,29 +6,20 @@ echo ""
 # 현재 활성 계정 확인
 current_account=$(gcloud config get-value account 2>/dev/null)
 
-# gcloud auth list 실행하여 계정 목록 가져오기
-auth_list=$(gcloud auth list --format="table(ACCOUNT,ACTIVE)")
+# gcloud auth list 실행하여 계정 목록 가져오기 (웹 콘솔 호환)
+auth_list=$(gcloud auth list --format="value(ACCOUNT)")
 
-# 계정 목록을 배열로 변환
+# 웹 콘솔과 일반 터미널 모두 지원하는 방식으로 파싱
 accounts=()
 while IFS= read -r line; do
-    # 헤더 라인 건너뛰기
-    if [[ "$line" == "ACCOUNT"* ]]; then
+    # 빈 라인이나 헤더 라인 건너뛰기
+    if [[ -z "$line" ]] || [[ "$line" == "ACTIVE:"* ]] || [[ "$line" == "ACCOUNT:"* ]]; then
         continue
     fi
     
-    # 빈 라인 건너뛰기
-    if [[ -z "$line" ]]; then
-        continue
-    fi
-    
-    # 계정 정보 파싱 (ACCOUNT ACTIVE 형식)
-    if [[ $line =~ ^([^[:space:]]+)[[:space:]]+([*[:space:]]*)$ ]]; then
-        account="${BASH_REMATCH[1]}"
-        active="${BASH_REMATCH[2]}"
-        if [[ -n "$account" ]]; then
-            accounts+=("$account")
-        fi
+    # 유효한 이메일 주소인지 확인
+    if [[ "$line" =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+        accounts+=("$line")
     fi
 done <<< "$auth_list"
 
@@ -164,33 +155,21 @@ echo ""
 echo "=== Google Cloud Organization ID Selection ==="
 echo ""
 
-# 조직 목록 가져오기
-organizations_list=$(gcloud organizations list --format="table(DISPLAY_NAME,ID)" 2>/dev/null)
-
-# 조직 목록을 배열로 변환
+# 조직 목록 가져오기 (웹 콘솔 호환)
 organizations=()
 organization_ids=()
-while IFS= read -r line; do
-    # 헤더 라인 건너뛰기
-    if [[ "$line" == "DISPLAY_NAME"* ]]; then
-        continue
+
+# 조직 이름과 ID를 별도로 가져오기
+org_names=($(gcloud organizations list --format="value(DISPLAY_NAME)" 2>/dev/null))
+org_ids=($(gcloud organizations list --format="value(ID)" 2>/dev/null))
+
+# 배열에 추가
+for i in "${!org_names[@]}"; do
+    if [[ -n "${org_names[$i]}" && -n "${org_ids[$i]}" ]]; then
+        organizations+=("${org_names[$i]}")
+        organization_ids+=("${org_ids[$i]}")
     fi
-    
-    # 빈 라인 건너뛰기
-    if [[ -z "$line" ]]; then
-        continue
-    fi
-    
-    # 조직 정보 파싱 (DISPLAY_NAME ID 형식)
-    if [[ $line =~ ^([^[:space:]]+)[[:space:]]+([0-9]+)$ ]]; then
-        org_name="${BASH_REMATCH[1]}"
-        org_id="${BASH_REMATCH[2]}"
-        if [[ -n "$org_id" ]]; then
-            organizations+=("$org_name")
-            organization_ids+=("$org_id")
-        fi
-    fi
-done <<< "$organizations_list"
+done
 
 # 조직이 없으면 안내
 if [ ${#organizations[@]} -eq 0 ]; then
@@ -244,6 +223,35 @@ if [[ -n "$selected_organization_id" ]]; then
     # 먼저 조직 직접 하위의 프로젝트들을 가져오기
     projects_list=$(gcloud projects list --filter="parent.id=$selected_organization_id" --format="table(PROJECT_ID,NAME,PROJECT_NUMBER)" --sort-by=NAME)
     
+    # 웹 콘솔 형식에 맞게 파싱
+    if [[ -n "$projects_list" && "$projects_list" != *"Listed 0 items"* ]]; then
+        echo "Found projects directly under organization:"
+        PARSED_PROJECTS=""
+        current_project_id=""
+        current_project_name=""
+        current_project_number=""
+        
+        while IFS= read -r line; do
+            if [[ "$line" =~ ^PROJECT_ID:[[:space:]]*(.+)$ ]]; then
+                current_project_id="${BASH_REMATCH[1]}"
+            elif [[ "$line" =~ ^NAME:[[:space:]]*(.+)$ ]]; then
+                current_project_name="${BASH_REMATCH[1]}"
+            elif [[ "$line" =~ ^PROJECT_NUMBER:[[:space:]]*(.+)$ ]]; then
+                current_project_number="${BASH_REMATCH[1]}"
+                # 모든 정보가 수집되면 한 라인으로 결합
+                if [[ -n "$current_project_id" && -n "$current_project_name" && -n "$current_project_number" ]]; then
+                    echo "  - $current_project_name ($current_project_id)"
+                    PARSED_PROJECTS="$PARSED_PROJECTS"$'\n'"$current_project_id $current_project_name $current_project_number"
+                    current_project_id=""
+                    current_project_name=""
+                    current_project_number=""
+                fi
+            fi
+        done <<< "$projects_list"
+        
+        projects_list="$PARSED_PROJECTS"
+    fi
+    
     # 프로젝트가 없으면 모든 접근 가능한 프로젝트에서 조직에 속한 것들 찾기
     if [ -z "$projects_list" ] || [[ "$projects_list" == *"Listed 0 items"* ]]; then
         echo "No projects found with parent filter, trying alternative methods..."
@@ -261,15 +269,32 @@ if [[ -n "$selected_organization_id" ]]; then
             FOLDER_PROJECTS=$(gcloud projects list --filter="parent.id=$folder" --format="table(PROJECT_ID,NAME,PROJECT_NUMBER)" 2>/dev/null)
             if [ ! -z "$FOLDER_PROJECTS" ] && [[ "$FOLDER_PROJECTS" != *"Listed 0 items"* ]]; then
                 echo "    Projects in folder:"
-                # 헤더를 제외하고 프로젝트 정보만 추가
-                FOLDER_PROJECTS_DATA=$(echo "$FOLDER_PROJECTS" | tail -n +2)
-                if [[ -n "$FOLDER_PROJECTS_DATA" ]]; then
-                    echo "$FOLDER_PROJECTS_DATA" | while read -r line; do
-                        if [[ -n "$line" ]]; then
-                            echo "      - $line"
+                # 웹 콘솔 형식에 맞게 파싱 (각 필드가 별도 라인)
+                FOLDER_PROJECTS_DATA=""
+                current_project_id=""
+                current_project_name=""
+                current_project_number=""
+                
+                while IFS= read -r line; do
+                    if [[ "$line" =~ ^PROJECT_ID:[[:space:]]*(.+)$ ]]; then
+                        current_project_id="${BASH_REMATCH[1]}"
+                    elif [[ "$line" =~ ^NAME:[[:space:]]*(.+)$ ]]; then
+                        current_project_name="${BASH_REMATCH[1]}"
+                    elif [[ "$line" =~ ^PROJECT_NUMBER:[[:space:]]*(.+)$ ]]; then
+                        current_project_number="${BASH_REMATCH[1]}"
+                        # 모든 정보가 수집되면 한 라인으로 결합
+                        if [[ -n "$current_project_id" && -n "$current_project_name" && -n "$current_project_number" ]]; then
+                            echo "      - $current_project_name ($current_project_id)"
+                            FOLDER_PROJECTS_DATA="$FOLDER_PROJECTS_DATA"$'\n'"$current_project_id $current_project_name $current_project_number"
+                            current_project_id=""
+                            current_project_name=""
+                            current_project_number=""
                         fi
-                    done
-                    # projects_list에 폴더 프로젝트들 추가
+                    fi
+                done <<< "$FOLDER_PROJECTS"
+                
+                # projects_list에 폴더 프로젝트들 추가
+                if [[ -n "$FOLDER_PROJECTS_DATA" ]]; then
                     projects_list="$projects_list"$'\n'"$FOLDER_PROJECTS_DATA"
                 fi
             fi
@@ -285,6 +310,33 @@ if [[ -n "$selected_organization_id" ]]; then
 else
     # 조직이 선택되지 않은 경우, 사용자가 직접 접근 가능한 프로젝트만 가져오기
     projects_list=$(gcloud projects list --format="table(PROJECT_ID,NAME,PROJECT_NUMBER)" --filter="lifecycleState:ACTIVE" --sort-by=NAME)
+    
+    # 웹 콘솔 형식에 맞게 파싱
+    if [[ -n "$projects_list" ]]; then
+        PARSED_PROJECTS=""
+        current_project_id=""
+        current_project_name=""
+        current_project_number=""
+        
+        while IFS= read -r line; do
+            if [[ "$line" =~ ^PROJECT_ID:[[:space:]]*(.+)$ ]]; then
+                current_project_id="${BASH_REMATCH[1]}"
+            elif [[ "$line" =~ ^NAME:[[:space:]]*(.+)$ ]]; then
+                current_project_name="${BASH_REMATCH[1]}"
+            elif [[ "$line" =~ ^PROJECT_NUMBER:[[:space:]]*(.+)$ ]]; then
+                current_project_number="${BASH_REMATCH[1]}"
+                # 모든 정보가 수집되면 한 라인으로 결합
+                if [[ -n "$current_project_id" && -n "$current_project_name" && -n "$current_project_number" ]]; then
+                    PARSED_PROJECTS="$PARSED_PROJECTS"$'\n'"$current_project_id $current_project_name $current_project_number"
+                    current_project_id=""
+                    current_project_name=""
+                    current_project_number=""
+                fi
+            fi
+        done <<< "$projects_list"
+        
+        projects_list="$PARSED_PROJECTS"
+    fi
 fi
 
 # 프로젝트 목록을 배열로 변환
