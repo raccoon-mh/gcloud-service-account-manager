@@ -221,34 +221,23 @@ if [[ -n "$selected_organization_id" ]]; then
     echo "Searching for all projects in organization: $selected_organization_name ($selected_organization_id)"
     
     # 먼저 조직 직접 하위의 프로젝트들을 가져오기
-    projects_list=$(gcloud projects list --filter="parent.id=$selected_organization_id" --format="table(PROJECT_ID,NAME,PROJECT_NUMBER)" --sort-by=NAME)
+    projects_list=$(gcloud projects list --filter="parent.id=$selected_organization_id" --format="value(PROJECT_ID,NAME,PROJECT_NUMBER)" --sort-by=NAME)
     
     # 웹 콘솔 형식에 맞게 파싱
     if [[ -n "$projects_list" && "$projects_list" != *"Listed 0 items"* ]]; then
         echo "Found projects directly under organization:"
         PARSED_PROJECTS=""
-        current_project_id=""
-        current_project_name=""
-        current_project_number=""
+        project_count=0
         
-        while IFS= read -r line; do
-            if [[ "$line" =~ ^PROJECT_ID:[[:space:]]*(.+)$ ]]; then
-                current_project_id="${BASH_REMATCH[1]}"
-            elif [[ "$line" =~ ^NAME:[[:space:]]*(.+)$ ]]; then
-                current_project_name="${BASH_REMATCH[1]}"
-            elif [[ "$line" =~ ^PROJECT_NUMBER:[[:space:]]*(.+)$ ]]; then
-                current_project_number="${BASH_REMATCH[1]}"
-                # 모든 정보가 수집되면 한 라인으로 결합
-                if [[ -n "$current_project_id" && -n "$current_project_name" && -n "$current_project_number" ]]; then
-                    echo "  - $current_project_name ($current_project_id)"
-                    PARSED_PROJECTS="$PARSED_PROJECTS"$'\n'"$current_project_id $current_project_name $current_project_number"
-                    current_project_id=""
-                    current_project_name=""
-                    current_project_number=""
-                fi
+        while IFS=$'\t' read -r project_id project_name project_number; do
+            if [[ -n "$project_id" && "$project_id" != "PROJECT_ID" ]]; then
+                project_count=$((project_count + 1))
+                echo "  - $project_name ($project_id)"
+                PARSED_PROJECTS="$PARSED_PROJECTS"$'\n'"$project_id $project_name $project_number"
             fi
         done <<< "$projects_list"
         
+        echo "  Total projects under organization: $project_count projects"
         projects_list="$PARSED_PROJECTS"
     fi
     
@@ -258,46 +247,90 @@ if [[ -n "$selected_organization_id" ]]; then
         projects_list=$(gcloud projects list --format="table(PROJECT_ID,NAME,PROJECT_NUMBER)" --filter="lifecycleState:ACTIVE" --sort-by=NAME)
     fi
     
-    # 폴더 내의 프로젝트들도 추가
-    echo "Searching for projects in all folders under organization..."
+    # 폴더 내의 프로젝트들도 추가 (재귀적으로 모든 폴더 검색)
+    echo "Searching for projects in all folders under organization (including nested folders)..."
+    
+    # 재귀적으로 모든 폴더를 찾는 함수
+    find_all_folders() {
+        local parent_id="$1"
+        local depth="$2"
+        local indent=""
+        
+        # 들여쓰기 생성
+        for ((i=0; i<depth; i++)); do
+            indent="$indent  "
+        done
+        
+        # 현재 레벨의 폴더들 찾기
+        local folders=$(gcloud resource-manager folders list --folder="$parent_id" --format="value(name)" 2>/dev/null)
+        
+        if [ ! -z "$folders" ]; then
+            echo "${indent}Found folders at depth $depth:"
+            for folder in $folders; do
+                echo "${indent}  - Folder: $folder"
+                
+                # 이 폴더 내의 프로젝트들 찾기
+                local folder_projects=$(gcloud projects list --filter="parent.id=$folder" --format="value(PROJECT_ID,NAME,PROJECT_NUMBER)" 2>/dev/null)
+                if [ ! -z "$folder_projects" ] && [[ "$folder_projects" != *"Listed 0 items"* ]]; then
+                    # 프로젝트 개수 계산
+                    local project_count=0
+                    local folder_projects_data=""
+                    
+                    while IFS=$'\t' read -r project_id project_name project_number; do
+                        if [[ -n "$project_id" && "$project_id" != "PROJECT_ID" ]]; then
+                            project_count=$((project_count + 1))
+                            echo "${indent}      - $project_name ($project_id)"
+                            folder_projects_data="$folder_projects_data"$'\n'"$project_id $project_name $project_number"
+                        fi
+                    done <<< "$folder_projects"
+                    
+                    echo "${indent}    Projects in folder: $project_count projects"
+                    
+                    # projects_list에 폴더 프로젝트들 추가
+                    if [[ -n "$folder_projects_data" ]]; then
+                        projects_list="$projects_list"$'\n'"$folder_projects_data"
+                    fi
+                fi
+                
+                # 재귀적으로 하위 폴더들 검색
+                find_all_folders "$folder" $((depth + 1))
+            done
+        fi
+    }
+    
+    # 조직 바로 아래의 폴더들부터 시작
     ALL_FOLDERS=$(gcloud resource-manager folders list --organization="$selected_organization_id" --format="value(name)" 2>/dev/null)
     
     if [ ! -z "$ALL_FOLDERS" ]; then
         echo "Found folders in organization:"
         for folder in $ALL_FOLDERS; do
             echo "  - Folder: $folder"
-            FOLDER_PROJECTS=$(gcloud projects list --filter="parent.id=$folder" --format="table(PROJECT_ID,NAME,PROJECT_NUMBER)" 2>/dev/null)
+            
+            # 이 폴더 내의 프로젝트들 찾기
+            FOLDER_PROJECTS=$(gcloud projects list --filter="parent.id=$folder" --format="value(PROJECT_ID,NAME,PROJECT_NUMBER)" 2>/dev/null)
             if [ ! -z "$FOLDER_PROJECTS" ] && [[ "$FOLDER_PROJECTS" != *"Listed 0 items"* ]]; then
-                echo "    Projects in folder:"
-                # 웹 콘솔 형식에 맞게 파싱 (각 필드가 별도 라인)
+                # 프로젝트 개수 계산
+                project_count=0
                 FOLDER_PROJECTS_DATA=""
-                current_project_id=""
-                current_project_name=""
-                current_project_number=""
                 
-                while IFS= read -r line; do
-                    if [[ "$line" =~ ^PROJECT_ID:[[:space:]]*(.+)$ ]]; then
-                        current_project_id="${BASH_REMATCH[1]}"
-                    elif [[ "$line" =~ ^NAME:[[:space:]]*(.+)$ ]]; then
-                        current_project_name="${BASH_REMATCH[1]}"
-                    elif [[ "$line" =~ ^PROJECT_NUMBER:[[:space:]]*(.+)$ ]]; then
-                        current_project_number="${BASH_REMATCH[1]}"
-                        # 모든 정보가 수집되면 한 라인으로 결합
-                        if [[ -n "$current_project_id" && -n "$current_project_name" && -n "$current_project_number" ]]; then
-                            echo "      - $current_project_name ($current_project_id)"
-                            FOLDER_PROJECTS_DATA="$FOLDER_PROJECTS_DATA"$'\n'"$current_project_id $current_project_name $current_project_number"
-                            current_project_id=""
-                            current_project_name=""
-                            current_project_number=""
-                        fi
+                while IFS=$'\t' read -r project_id project_name project_number; do
+                    if [[ -n "$project_id" && "$project_id" != "PROJECT_ID" ]]; then
+                        project_count=$((project_count + 1))
+                        echo "      - $project_name ($project_id)"
+                        FOLDER_PROJECTS_DATA="$FOLDER_PROJECTS_DATA"$'\n'"$project_id $project_name $project_number"
                     fi
                 done <<< "$FOLDER_PROJECTS"
+                
+                echo "    Projects in folder: $project_count projects"
                 
                 # projects_list에 폴더 프로젝트들 추가
                 if [[ -n "$FOLDER_PROJECTS_DATA" ]]; then
                     projects_list="$projects_list"$'\n'"$FOLDER_PROJECTS_DATA"
                 fi
             fi
+            
+            # 재귀적으로 하위 폴더들 검색
+            find_all_folders "$folder" 1
         done
     fi
     
@@ -309,32 +342,21 @@ if [[ -n "$selected_organization_id" ]]; then
     fi
 else
     # 조직이 선택되지 않은 경우, 사용자가 직접 접근 가능한 프로젝트만 가져오기
-    projects_list=$(gcloud projects list --format="table(PROJECT_ID,NAME,PROJECT_NUMBER)" --filter="lifecycleState:ACTIVE" --sort-by=NAME)
+    projects_list=$(gcloud projects list --format="value(PROJECT_ID,NAME,PROJECT_NUMBER)" --filter="lifecycleState:ACTIVE" --sort-by=NAME)
     
     # 웹 콘솔 형식에 맞게 파싱
     if [[ -n "$projects_list" ]]; then
         PARSED_PROJECTS=""
-        current_project_id=""
-        current_project_name=""
-        current_project_number=""
+        project_count=0
         
-        while IFS= read -r line; do
-            if [[ "$line" =~ ^PROJECT_ID:[[:space:]]*(.+)$ ]]; then
-                current_project_id="${BASH_REMATCH[1]}"
-            elif [[ "$line" =~ ^NAME:[[:space:]]*(.+)$ ]]; then
-                current_project_name="${BASH_REMATCH[1]}"
-            elif [[ "$line" =~ ^PROJECT_NUMBER:[[:space:]]*(.+)$ ]]; then
-                current_project_number="${BASH_REMATCH[1]}"
-                # 모든 정보가 수집되면 한 라인으로 결합
-                if [[ -n "$current_project_id" && -n "$current_project_name" && -n "$current_project_number" ]]; then
-                    PARSED_PROJECTS="$PARSED_PROJECTS"$'\n'"$current_project_id $current_project_name $current_project_number"
-                    current_project_id=""
-                    current_project_name=""
-                    current_project_number=""
-                fi
+        while IFS=$'\t' read -r project_id project_name project_number; do
+            if [[ -n "$project_id" && "$project_id" != "PROJECT_ID" ]]; then
+                project_count=$((project_count + 1))
+                PARSED_PROJECTS="$PARSED_PROJECTS"$'\n'"$project_id $project_name $project_number"
             fi
         done <<< "$projects_list"
         
+        echo "Found $project_count accessible projects"
         projects_list="$PARSED_PROJECTS"
     fi
 fi
@@ -344,14 +366,26 @@ projects=()
 project_ids=()
 project_numbers=()
 
-# awk를 사용하여 안정적으로 파싱
+# awk를 사용하여 안정적으로 파싱 (프로젝트 이름에 공백이 있어도 올바르게 파싱)
 while IFS=$'\t' read -r project_id project_name project_number; do
     if [[ -n "$project_id" && "$project_id" != "PROJECT_ID" ]]; then
         projects+=("$project_name")
         project_ids+=("$project_id")
         project_numbers+=("$project_number")
     fi
-done < <(echo "$projects_list" | awk '{print $1 "\t" $2 "\t" $3}')
+done < <(echo "$projects_list" | awk '{
+    # 첫 번째 필드는 PROJECT_ID
+    project_id = $1
+    # 마지막 필드는 PROJECT_NUMBER
+    project_number = $NF
+    # 중간의 모든 필드가 PROJECT_NAME (공백 포함)
+    project_name = ""
+    for (i = 2; i < NF; i++) {
+        if (i > 2) project_name = project_name " "
+        project_name = project_name $i
+    }
+    print project_id "\t" project_name "\t" project_number
+}')
 
 # 프로젝트가 없으면 안내
 if [ ${#projects[@]} -eq 0 ]; then
@@ -361,7 +395,7 @@ if [ ${#projects[@]} -eq 0 ]; then
 fi
 
 # 프로젝트 목록 표시
-echo "Available project list:"
+echo "Available project list (${#projects[@]} projects found):"
 echo ""
 
 for i in "${!projects[@]}"; do
@@ -423,6 +457,11 @@ NAME=$selected_project_name
 # ORGANIZATION CONFIG
 ORGANIZATION_ID=$selected_organization_id
 ORGANIZATION_NAME=$selected_organization_name
+
+# CUSTOM ROLE CONFIG
+CUSTOM_ROLE_NAME=$(echo ${selected_project_id} | tr '-' '_')_role
+CUSTOM_ORG_ROLE_NAME=$(echo ${selected_project_id} | tr '-' '_')_role
+CUSTOM_ROLE_DESCRIPTION="Custom role for $selected_project_name"
 
 EOF
 
