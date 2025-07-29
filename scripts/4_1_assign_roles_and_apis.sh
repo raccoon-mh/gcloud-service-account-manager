@@ -38,8 +38,6 @@ fi
 source "$CONFIG_ENV_FILE"
 
 echo "Configuration loaded:"
-echo "  Organization ID: $ORGANIZATION_ID"
-echo "  Organization Name: $ORGANIZATION_NAME"
 echo "  Project ID: $PROJECT_ID"
 echo "  Project Name: $NAME"
 echo ""
@@ -51,12 +49,12 @@ echo ""
 # Load APIs from JSON file
 APIS_TO_ENABLE=($(jq -r '.apis[]' "$CONFIG_APIS_FILE"))
 
-# Load organization roles from JSON file
-ORG_ROLES=($(jq -r '.org_roles[].role' "$CONFIG_ROLES_FILE"))
+# Load role
+ROLE_ID="projects/$PROJECT_ID/roles/$CUSTOM_ROLE_NAME"
 
 echo "Loaded configuration:"
 echo "  APIs to enable: ${#APIS_TO_ENABLE[@]} APIs"
-echo "  Organization roles to assign: ${#ORG_ROLES[@]} roles"
+echo "  Role to assign: $ROLE_ID"
 echo ""
 
 # ==============================================================================
@@ -84,6 +82,9 @@ if [ ${#SERVICE_ACCOUNT_LIST[@]} -eq 0 ]; then
 fi
 
 echo "Found ${#SERVICE_ACCOUNT_LIST[@]} service account(s):"
+# for account in "${SERVICE_ACCOUNT_LIST[@]}"; do
+#     echo "  - $account"
+# done
 echo ""
 
 # ==============================================================================
@@ -113,120 +114,51 @@ SELECTED_ACCOUNT="${SERVICE_ACCOUNT_LIST[$SELECTED_INDEX]}"
 
 echo ""
 echo "Selected: $SELECTED_ACCOUNT"
-echo "Organization: $ORGANIZATION_NAME ($ORGANIZATION_ID)"
+echo "Project: $PROJECT_ID"
 echo ""
 
 # ==============================================================================
-# Enable APIs for all projects in organization
+# Enable APIs
 # ==============================================================================
 
 echo "=================================================="
-echo "Enabling APIs for all projects in organization: $ORGANIZATION_NAME"
+echo "Enabling APIs for project: $PROJECT_ID"
 echo "=================================================="
 
-# Get all projects in the organization
-echo "Searching for all projects in organization: $ORGANIZATION_NAME ($ORGANIZATION_ID)"
-
-# First, try to get projects directly under the organization
-PROJECTS_IN_ORG=$(gcloud projects list --filter="parent.id=$ORGANIZATION_ID" --format="value(projectId)")
-
-# If no projects found, try alternative methods
-if [ -z "$PROJECTS_IN_ORG" ]; then
-    echo "No projects found with parent filter, trying alternative methods..."
-    
-    # Get all projects and filter by organization
-    ALL_PROJECTS=$(gcloud projects list --format="value(projectId)")
-    PROJECTS_IN_ORG=""
-    
-    for project in $ALL_PROJECTS; do
-        # Get project details to check if it belongs to our organization
-        PROJECT_ORG=$(gcloud projects describe "$project" --format="value(parent.id)" 2>/dev/null)
-        if [ "$PROJECT_ORG" = "$ORGANIZATION_ID" ]; then
-            PROJECTS_IN_ORG="$PROJECTS_IN_ORG $project"
-        fi
-    done
-fi
-
-# If still no projects found, try getting all projects and check their organization
-if [ -z "$PROJECTS_IN_ORG" ]; then
-    echo "Still no projects found, getting all projects..."
-    PROJECTS_IN_ORG=$(gcloud projects list --format="value(projectId)")
-fi
-
-# Get all folders in the organization and their projects
-echo "Searching for projects in all folders under organization..."
-ALL_FOLDERS=$(gcloud resource-manager folders list --organization="$ORGANIZATION_ID" --format="value(name)" 2>/dev/null)
-
-if [ ! -z "$ALL_FOLDERS" ]; then
-    echo "Found folders in organization:"
-    for folder in $ALL_FOLDERS; do
-        echo "  - Folder: $folder"
-        # Get projects in this folder
-        FOLDER_PROJECTS=$(gcloud projects list --filter="parent.id=$folder" --format="value(projectId)" 2>/dev/null)
-        if [ ! -z "$FOLDER_PROJECTS" ]; then
-            echo "    Projects in folder:"
-            for project in $FOLDER_PROJECTS; do
-                echo "      - $project"
-                PROJECTS_IN_ORG="$PROJECTS_IN_ORG $project"
-            done
-        fi
-    done
-fi
-
-# Remove duplicates and clean up the list
-PROJECTS_IN_ORG=$(echo $PROJECTS_IN_ORG | tr ' ' '\n' | sort -u | tr '\n' ' ')
-
-if [ -z "$PROJECTS_IN_ORG" ]; then
-    echo "No projects found in organization: $ORGANIZATION_NAME"
-    exit 1
-fi
-
-echo "Found projects in organization:"
-for project in $PROJECTS_IN_ORG; do
-    echo "  - $project"
-done
-echo ""
-
-# Enable APIs for each project
-for project in $PROJECTS_IN_ORG; do
-    echo "Enabling APIs for project: $project"
-    for api in "${APIS_TO_ENABLE[@]}"; do
-        echo "  - Enabling $api..."
-        gcloud services enable "$api" --project="$project" > /dev/null 2>&1
-        if [ $? -ne 0 ]; then
-            echo "Failed to enable API: $api in project: $project"
-            # Continue with other projects instead of exiting
-        fi
-    done
-    echo "  APIs enabled for project: $project"
-    echo ""
-done
-
-echo ""
-echo "API enabling completed for all projects."
-echo ""
-
-# ==============================================================================
-# Assign organization roles
-# ==============================================================================
-
-echo "=================================================="
-echo "Assigning organization roles to service account: $SELECTED_ACCOUNT"
-echo "=================================================="
-
-for role in "${ORG_ROLES[@]}"; do
-    echo "  - Assigning $role..."
-    gcloud organizations add-iam-policy-binding "$ORGANIZATION_ID" \
-        --member="serviceAccount:$SELECTED_ACCOUNT" \
-        --role="$role" > /dev/null 2>&1
+for api in "${APIS_TO_ENABLE[@]}"; do
+    echo "  - Enabling $api..."
+    gcloud services enable "$api" --project="$PROJECT_ID"
     if [ $? -ne 0 ]; then
-        echo "Failed to assign organization role: $role"
+        echo "Failed to enable API: $api"
         exit 1
     fi
 done
 
 echo ""
-echo "All organization roles assigned successfully."
+echo "All APIs enabled successfully."
+echo ""
+
+# ==============================================================================
+# Assign roles
+# ==============================================================================
+
+echo "=================================================="
+echo "Assigning roles to service account: $SELECTED_ACCOUNT"
+echo "=================================================="
+
+
+echo "  - Assigning $ROLE_ID..."
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+    --member="serviceAccount:$SELECTED_ACCOUNT" \
+    --role="$ROLE_ID" \
+    --condition=None > /dev/null 2>&1
+if [ $? -ne 0 ]; then
+    echo "Failed to assign role: $ROLE_ID"
+    exit 1
+fi
+
+echo ""
+echo "All roles assigned successfully."
 echo ""
 
 # ==============================================================================
@@ -237,8 +169,7 @@ echo "=================================================="
 echo "Operation completed successfully!"
 echo "=================================================="
 echo "Service Account: $SELECTED_ACCOUNT"
-echo "Organization: $ORGANIZATION_NAME ($ORGANIZATION_ID)"
-echo "Projects Processed: $(echo $PROJECTS_IN_ORG | wc -w)"
+echo "Project: $PROJECT_ID"
 echo "APIs Enabled: ${#APIS_TO_ENABLE[@]}"
-echo "Organization Roles Assigned: ${#ORG_ROLES[@]}"
+echo "Roles Assigned: $ROLE_ID"
 echo "=================================================="
