@@ -51,12 +51,16 @@ echo ""
 # Load APIs from JSON file
 APIS_TO_ENABLE=($(jq -r '.apis[]' "$CONFIG_APIS_FILE"))
 
-# Load role from JSON file
+# Load custom organization role
 ROLE_ID="organizations/$ORGANIZATION_ID/roles/$CUSTOM_ORG_ROLE_NAME"
+
+# Load organization roles from JSON file
+ORG_ROLES=($(jq -r '.org_roles[]' "$CONFIG_ROLES_FILE"))
 
 echo "Loaded configuration:"
 echo "  APIs to enable: ${#APIS_TO_ENABLE[@]} APIs"
-echo "  Role to assign: $ROLE_ID"
+echo "  Custom organization role to assign: $ROLE_ID"
+echo "  Organization roles to assign: ${#ORG_ROLES[@]} roles"
 echo "" 
 
 # ==============================================================================
@@ -253,13 +257,31 @@ echo "=================================================="
 echo "Assigning organization roles to service account: $SELECTED_ACCOUNT"
 echo "=================================================="
 
-echo "  - Assigning $ROLE_ID..."
+# Assign custom organization role
+echo "  - Assigning custom organization role: $ROLE_ID..."
 gcloud organizations add-iam-policy-binding "$ORGANIZATION_ID" \
     --member="serviceAccount:$SELECTED_ACCOUNT" \
     --role="$ROLE_ID" > /dev/null 2>&1
 if [ $? -ne 0 ]; then
-    echo "Failed to assign organization role: $ROLE_ID"
+    echo "Failed to assign custom organization role: $ROLE_ID"
     exit 1
+fi
+
+# Assign organization roles from roles.json
+if [ ${#ORG_ROLES[@]} -gt 0 ]; then
+    echo "  - Assigning organization roles from roles.json..."
+    for role in "${ORG_ROLES[@]}"; do
+        echo "    - Assigning role: $role..."
+        gcloud organizations add-iam-policy-binding "$ORGANIZATION_ID" \
+            --member="serviceAccount:$SELECTED_ACCOUNT" \
+            --role="$role" > /dev/null 2>&1
+        if [ $? -ne 0 ]; then
+            echo "Failed to assign organization role: $role"
+            exit 1
+        fi
+    done
+else
+    echo "  - No organization roles found in roles.json"
 fi
 
 echo ""
@@ -277,5 +299,11 @@ echo "Service Account: $SELECTED_ACCOUNT"
 echo "Organization: $ORGANIZATION_NAME ($ORGANIZATION_ID)"
 echo "Projects Processed: $(echo $PROJECTS_IN_ORG | wc -w)"
 echo "APIs Enabled: ${#APIS_TO_ENABLE[@]}"
-echo "Organization Roles Assigned: $ROLE_ID"
+echo "Custom Organization Role Assigned: $ROLE_ID"
+echo "Organization Roles Assigned: ${#ORG_ROLES[@]}"
+if [ ${#ORG_ROLES[@]} -gt 0 ]; then
+    for role in "${ORG_ROLES[@]}"; do
+        echo "  - $role"
+    done
+fi
 echo "=================================================="

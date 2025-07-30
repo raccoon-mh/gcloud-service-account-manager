@@ -22,8 +22,7 @@ while IFS= read -r line; do
         accounts+=("$line")
     fi
 done <<< "$auth_list"
-
-# 계정이 없으면 안내
+ 
 if [ ${#accounts[@]} -eq 0 ]; then
     echo "No authenticated accounts found."
     echo "Please login with the following command:"
@@ -460,7 +459,7 @@ ORGANIZATION_NAME=$selected_organization_name
 
 # CUSTOM ROLE CONFIG
 CUSTOM_ROLE_NAME=$(echo ${selected_project_id} | tr '-' '_')_role
-CUSTOM_ORG_ROLE_NAME=$(echo ${selected_project_id} | tr '-' '_')_role
+CUSTOM_ORG_ROLE_NAME=$(echo ${selected_project_id} | tr '-' '_')_org_role
 CUSTOM_ROLE_DESCRIPTION="Custom role for $selected_project_name"
 
 EOF

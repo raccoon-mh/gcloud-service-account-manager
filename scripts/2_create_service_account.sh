@@ -8,11 +8,10 @@
 if [ $# -eq 0 ]; then
     echo "  Usage: $0 <service_account_name>"
     echo "  Example: $0 project-sa"
-    exit 1
+    SA_NAME="project-sa"
+else
+    SA_NAME="$1"
 fi
-
-# 서비스 계정 이름을 첫 번째 인자로 받기
-SA_NAME="$1"
 
 # config.env 파일 읽기
 CONFIG_FILE="../config.env"

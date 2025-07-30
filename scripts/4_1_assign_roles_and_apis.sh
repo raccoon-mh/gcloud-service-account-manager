@@ -49,12 +49,16 @@ echo ""
 # Load APIs from JSON file
 APIS_TO_ENABLE=($(jq -r '.apis[]' "$CONFIG_APIS_FILE"))
 
-# Load role
+# Load custom role
 ROLE_ID="projects/$PROJECT_ID/roles/$CUSTOM_ROLE_NAME"
+
+# Load project roles from JSON file
+PROJECT_ROLES=($(jq -r '.project_roles[]' "$CONFIG_ROLES_FILE"))
 
 echo "Loaded configuration:"
 echo "  APIs to enable: ${#APIS_TO_ENABLE[@]} APIs"
-echo "  Role to assign: $ROLE_ID"
+echo "  Custom role to assign: $ROLE_ID"
+echo "  Project roles to assign: ${#PROJECT_ROLES[@]} roles"
 echo ""
 
 # ==============================================================================
@@ -146,15 +150,33 @@ echo "=================================================="
 echo "Assigning roles to service account: $SELECTED_ACCOUNT"
 echo "=================================================="
 
-
-echo "  - Assigning $ROLE_ID..."
+# Assign custom role
+echo "  - Assigning custom role: $ROLE_ID..."
 gcloud projects add-iam-policy-binding "$PROJECT_ID" \
     --member="serviceAccount:$SELECTED_ACCOUNT" \
     --role="$ROLE_ID" \
     --condition=None > /dev/null 2>&1
 if [ $? -ne 0 ]; then
-    echo "Failed to assign role: $ROLE_ID"
+    echo "Failed to assign custom role: $ROLE_ID"
     exit 1
+fi
+
+# Assign project roles from roles.json
+if [ ${#PROJECT_ROLES[@]} -gt 0 ]; then
+    echo "  - Assigning project roles from roles.json..."
+    for role in "${PROJECT_ROLES[@]}"; do
+        echo "    - Assigning role: $role..."
+        gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+            --member="serviceAccount:$SELECTED_ACCOUNT" \
+            --role="$role" \
+            --condition=None > /dev/null 2>&1
+        if [ $? -ne 0 ]; then
+            echo "Failed to assign project role: $role"
+            exit 1
+        fi
+    done
+else
+    echo "  - No project roles found in roles.json"
 fi
 
 echo ""
@@ -171,5 +193,11 @@ echo "=================================================="
 echo "Service Account: $SELECTED_ACCOUNT"
 echo "Project: $PROJECT_ID"
 echo "APIs Enabled: ${#APIS_TO_ENABLE[@]}"
-echo "Roles Assigned: $ROLE_ID"
+echo "Custom Role Assigned: $ROLE_ID"
+echo "Project Roles Assigned: ${#PROJECT_ROLES[@]}"
+if [ ${#PROJECT_ROLES[@]} -gt 0 ]; then
+    for role in "${PROJECT_ROLES[@]}"; do
+        echo "  - $role"
+    done
+fi
 echo "=================================================="
